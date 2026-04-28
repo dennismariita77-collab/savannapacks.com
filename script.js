@@ -122,15 +122,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ===== DATA PERSISTENCE =====
 function loadData() {
-  products = JSON.parse(localStorage.getItem('sp_products') || 'null') || DEFAULT_PRODUCTS;
-  orders = JSON.parse(localStorage.getItem('sp_orders') || '[]');
-  feedbacks = JSON.parse(localStorage.getItem('sp_feedbacks') || 'null') || DEFAULT_FEEDBACKS;
-  subscribers = JSON.parse(localStorage.getItem('sp_subscribers') || '[]');
-  cart = JSON.parse(localStorage.getItem('sp_cart') || '[]');
+  try {
+    products   = JSON.parse(localStorage.getItem('sp_products')   || 'null') || DEFAULT_PRODUCTS;
+    orders     = JSON.parse(localStorage.getItem('sp_orders')     || '[]');
+    feedbacks  = JSON.parse(localStorage.getItem('sp_feedbacks')  || 'null') || DEFAULT_FEEDBACKS;
+    subscribers= JSON.parse(localStorage.getItem('sp_subscribers')|| '[]');
+    cart       = JSON.parse(localStorage.getItem('sp_cart')       || '[]');
+  } catch (e) {
+    console.error('Error loading saved data, resetting to defaults:', e);
+    products   = DEFAULT_PRODUCTS;
+    orders     = [];
+    feedbacks  = DEFAULT_FEEDBACKS;
+    subscribers= [];
+    cart       = [];
+  }
   updateCartUI();
 }
 
-function saveProducts() { localStorage.setItem('sp_products', JSON.stringify(products)); }
+function saveProducts() {
+  try {
+    localStorage.setItem('sp_products', JSON.stringify(products));
+  } catch (e) {
+    if (e.name === 'QuotaExceededError' || e.code === 22) {
+      showToast('Storage full! Please use smaller images (under 500KB).', 'error');
+      console.error('localStorage quota exceeded:', e);
+    } else {
+      console.error('Save error:', e);
+    }
+  }
+}
 function saveOrders() { localStorage.setItem('sp_orders', JSON.stringify(orders)); }
 function saveFeedbacks() { localStorage.setItem('sp_feedbacks', JSON.stringify(feedbacks)); }
 function saveSubscribers() { localStorage.setItem('sp_subscribers', JSON.stringify(subscribers)); }
@@ -698,37 +718,67 @@ function renderAdminProducts() {
 }
 
 // ===== IMAGE UPLOAD HANDLER =====
+/**
+ * Compresses an uploaded image using a canvas before storing.
+ * Resizes to max 800px on longest side, JPEG at 72% quality.
+ * Typical result: 2MB photo → ~50-80KB — well within localStorage limits.
+ */
 function handleImageUpload(input) {
   const file = input.files[0];
   if (!file) return;
 
-  // Warn if file is very large
-  if (file.size > 5 * 1024 * 1024) {
-    showToast('Image is large. Consider using a smaller file for better performance.', '');
-  }
+  showToast('Processing image...', '');
 
   const reader = new FileReader();
   reader.onload = function (e) {
-    const base64 = e.target.result;
-    document.getElementById('pImage').value = base64;
+    const img = new Image();
+    img.onload = function () {
+      // Resize: cap longest dimension at 800px
+      const MAX = 800;
+      let w = img.width;
+      let h = img.height;
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round((h / w) * MAX); w = MAX; }
+        else        { w = Math.round((w / h) * MAX); h = MAX; }
+      }
 
-    const preview = document.getElementById('imagePreview');
-    const placeholder = document.getElementById('uploadPlaceholder');
-    const area = document.getElementById('imageUploadArea');
+      const canvas = document.createElement('canvas');
+      canvas.width  = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
 
-    preview.src = base64;
-    preview.style.display = 'block';
-    placeholder.style.display = 'none';
-    area.classList.add('has-image');
+      // Export as JPEG at 72% quality
+      const compressed = canvas.toDataURL('image/jpeg', 0.72);
 
-    // Add "click to change" hint
-    let hint = area.querySelector('.upload-change-hint');
-    if (!hint) {
-      hint = document.createElement('div');
-      hint.className = 'upload-change-hint';
-      hint.textContent = 'Click to change image';
-      area.appendChild(hint);
-    }
+      const originalKB  = Math.round(e.target.result.length  * 0.75 / 1024);
+      const compressedKB = Math.round(compressed.length * 0.75 / 1024);
+      console.log(`Image compressed: ${originalKB}KB → ${compressedKB}KB`);
+
+      // Store the compressed base64 in the hidden input
+      document.getElementById('pImage').value = compressed;
+
+      // Show preview
+      const preview     = document.getElementById('imagePreview');
+      const placeholder = document.getElementById('uploadPlaceholder');
+      const area        = document.getElementById('imageUploadArea');
+
+      preview.src          = compressed;
+      preview.style.display = 'block';
+      placeholder.style.display = 'none';
+      area.classList.add('has-image');
+
+      let hint = area.querySelector('.upload-change-hint');
+      if (!hint) {
+        hint = document.createElement('div');
+        hint.className   = 'upload-change-hint';
+        hint.textContent = 'Click to change image';
+        area.appendChild(hint);
+      }
+
+      showToast(`Image ready (${compressedKB}KB) ✓`, 'success');
+    };
+    img.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
